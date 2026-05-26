@@ -325,6 +325,20 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 
 		Default: _"None"_
 
+	*bold_foreground* = _"<string>"_
+
+		Foreground color used to draw bold text using the default foreground
+		instead of rendering it with the bold font.
+
+		Default: _"None"_
+
+	*underline_foreground* = _"<string>"_
+
+		Foreground color used to draw plain underlined text using the default
+		foreground instead of rendering the underline.
+
+		Default: _"None"_
+
 *cursor* = { text = _"<string>"_, cursor = _"<string>"_ }
 
 	Colors which should be used to draw the terminal cursor.
@@ -489,6 +503,14 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 *draw_bold_text_with_bright_colors* = _true_ | _false_
 
 	When _true_, bold text is drawn using the bright color variants.
+
+	Default: _false_
+
+*bold_is_color_only* = _true_ | _false_
+
+	When _true_, bold text is always rendered without the bold font. The
+	_colors.primary.bold\_foreground_ color is still used for bold text using
+	the default foreground.
 
 	Default: _false_
 

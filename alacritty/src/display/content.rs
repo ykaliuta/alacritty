@@ -210,6 +210,15 @@ impl RenderableCell {
         // Lookup RGB values.
         let mut fg = Self::compute_fg_rgb(content, cell.fg, cell.flags);
         let mut bg = Self::compute_bg_rgb(content, cell.bg);
+        let mut flags = cell.flags;
+
+        Self::apply_attribute_foreground_colors(
+            &content.config.colors,
+            cell.fg,
+            cell.flags,
+            &mut fg,
+            &mut flags,
+        );
 
         let mut bg_alpha = if cell.flags.contains(Flags::INVERSE) {
             mem::swap(&mut fg, &mut bg);
@@ -230,7 +239,6 @@ impl RenderableCell {
         let viewport_start = Point::new(Line(-(display_offset as i32)), Column(0));
         let colors = &content.config.colors;
         let mut character = cell.c;
-        let mut flags = cell.flags;
 
         let num_cols = content.size.columns();
         if let Some((c, is_first)) = content
@@ -283,7 +291,7 @@ impl RenderableCell {
 
         let underline = cell
             .underline_color()
-            .map_or(fg, |underline| Self::compute_fg_rgb(content, underline, flags));
+            .map_or(fg, |underline| Self::compute_fg_rgb(content, underline, cell.flags));
 
         let zerowidth = cell.zerowidth();
         let hyperlink = cell.hyperlink();
@@ -366,6 +374,42 @@ impl RenderableCell {
 
                 content.color(idx)
             },
+        }
+    }
+
+    /// Apply configured foreground colors for text attributes rendered as colors.
+    fn apply_attribute_foreground_colors(
+        colors: &crate::config::color::Colors,
+        cell_fg: Color,
+        original_flags: Flags,
+        fg: &mut Rgb,
+        flags: &mut Flags,
+    ) {
+        // Match xterm's default `colorAttrMode: false` behavior: attribute colors do not
+        // override explicit ANSI foreground colors.
+        if cell_fg != Color::Named(NamedColor::Foreground) {
+            if colors.bold_is_color_only && original_flags.contains(Flags::BOLD) {
+                flags.remove(Flags::BOLD);
+            }
+
+            return;
+        }
+
+        if original_flags.contains(Flags::BOLD) {
+            if let Some(bold_foreground) = colors.primary.bold_foreground {
+                *fg = bold_foreground;
+            }
+
+            if colors.bold_is_color_only || colors.primary.bold_foreground.is_some() {
+                flags.remove(Flags::BOLD);
+            }
+        }
+
+        if original_flags.contains(Flags::UNDERLINE) {
+            if let Some(underline_foreground) = colors.primary.underline_foreground {
+                *fg = underline_foreground;
+                flags.remove(Flags::UNDERLINE);
+            }
         }
     }
 
@@ -548,5 +592,152 @@ impl Deref for HintMatches<'_> {
 
     fn deref(&self) -> &Self::Target {
         self.matches.deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::color::Colors;
+
+    #[test]
+    fn bold_foreground_replaces_bold_flag() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(Rgb::new(0x12, 0x34, 0x56));
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let mut flags = Flags::BOLD;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Foreground),
+            flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0x12, 0x34, 0x56));
+        assert!(!flags.contains(Flags::BOLD));
+    }
+
+    #[test]
+    fn bold_foreground_preserves_italic_flag() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(Rgb::new(0x12, 0x34, 0x56));
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let mut flags = Flags::BOLD_ITALIC;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Foreground),
+            flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0x12, 0x34, 0x56));
+        assert_eq!(flags & Flags::BOLD_ITALIC, Flags::ITALIC);
+    }
+
+    #[test]
+    fn underline_foreground_replaces_plain_underline_only() {
+        let mut colors = Colors::default();
+        colors.primary.underline_foreground = Some(Rgb::new(0x56, 0x34, 0x12));
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let original_flags = Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE;
+        let mut flags = original_flags;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Foreground),
+            original_flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0x56, 0x34, 0x12));
+        assert!(!flags.contains(Flags::UNDERLINE));
+        assert!(flags.contains(Flags::DOUBLE_UNDERLINE));
+    }
+
+    #[test]
+    fn unset_attribute_foreground_colors_preserve_flags_and_color() {
+        let colors = Colors::default();
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let original_flags = Flags::BOLD | Flags::UNDERLINE;
+        let mut flags = original_flags;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Foreground),
+            original_flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0xaa, 0xbb, 0xcc));
+        assert_eq!(flags, original_flags);
+    }
+
+    #[test]
+    fn attribute_foreground_colors_do_not_override_ansi_foreground() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(Rgb::new(0x12, 0x34, 0x56));
+        colors.primary.underline_foreground = Some(Rgb::new(0x56, 0x34, 0x12));
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let original_flags = Flags::BOLD | Flags::UNDERLINE;
+        let mut flags = original_flags;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Blue),
+            original_flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0xaa, 0xbb, 0xcc));
+        assert_eq!(flags, original_flags);
+    }
+
+    #[test]
+    fn bold_is_color_only_removes_bold_without_bold_foreground() {
+        let mut colors = Colors::default();
+        colors.bold_is_color_only = true;
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let mut flags = Flags::BOLD;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Foreground),
+            flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0xaa, 0xbb, 0xcc));
+        assert!(!flags.contains(Flags::BOLD));
+    }
+
+    #[test]
+    fn bold_is_color_only_preserves_ansi_foreground_color() {
+        let mut colors = Colors::default();
+        colors.bold_is_color_only = true;
+        colors.primary.bold_foreground = Some(Rgb::new(0x12, 0x34, 0x56));
+        let mut fg = Rgb::new(0xaa, 0xbb, 0xcc);
+        let original_flags = Flags::BOLD | Flags::UNDERLINE;
+        let mut flags = original_flags;
+
+        RenderableCell::apply_attribute_foreground_colors(
+            &colors,
+            Color::Named(NamedColor::Blue),
+            original_flags,
+            &mut fg,
+            &mut flags,
+        );
+
+        assert_eq!(fg, Rgb::new(0xaa, 0xbb, 0xcc));
+        assert!(!flags.contains(Flags::BOLD));
+        assert!(flags.contains(Flags::UNDERLINE));
     }
 }
