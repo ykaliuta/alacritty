@@ -14,6 +14,14 @@ Notable changes to the `alacritty_terminal` crate are documented in its
 
 - Fixed `alacritty-escapes(7)` manpage missing from macOS install
 
+### Added
+
+- `colors.primary.bold_foreground` and `colors.primary.underline_foreground` to
+  recolor bold and underlined text when the cell uses the default foreground
+  (XTerm-style `colorBD` / `colorUL`)
+- `colors.bold_is_color_only` to render bold cells with the regular font weight
+  when `colors.primary.bold_foreground` is set
+
 ### Fixed
 
 - Spurious "Failed to set new owner of XCB selection" warnings on X11

@@ -210,6 +210,16 @@ impl RenderableCell {
         // Lookup RGB values.
         let mut fg = Self::compute_fg_rgb(content, cell.fg, cell.flags);
         let mut bg = Self::compute_bg_rgb(content, cell.bg);
+        let mut flags = cell.flags;
+
+        // Apply XTerm `colorBD`/`colorUL` attribute color overrides.
+        Self::apply_attribute_foreground_colors(
+            &content.config.colors,
+            cell.fg,
+            cell.underline_color(),
+            &mut fg,
+            &mut flags,
+        );
 
         let mut bg_alpha = if cell.flags.contains(Flags::INVERSE) {
             mem::swap(&mut fg, &mut bg);
@@ -230,7 +240,6 @@ impl RenderableCell {
         let viewport_start = Point::new(Line(-(display_offset as i32)), Column(0));
         let colors = &content.config.colors;
         let mut character = cell.c;
-        let mut flags = cell.flags;
 
         let num_cols = content.size.columns();
         if let Some((c, is_first)) = content
@@ -319,6 +328,55 @@ impl RenderableCell {
 
         if bg != CellRgb::CellBackground {
             *bg_alpha = 1.0;
+        }
+    }
+
+    /// Apply XTerm-style `colorBD`/`colorUL` foreground overrides for attribute text.
+    ///
+    /// Only cells using the default foreground are recolored, matching XTerm's default
+    /// `colorAttrMode`, so application-chosen SGR colors are left untouched. `colorBD`
+    /// recolors bold cells and `colorUL` recolors underlined ones (tinting both the glyph
+    /// and the underline mark, unless an explicit SGR-58 color was set). With
+    /// `bold_is_color_only` (XTerm's `colorBDMode` / `-bdc`) the bold font weight is also
+    /// dropped so color alone marks bold cells.
+    fn apply_attribute_foreground_colors(
+        colors: &crate::config::color::Colors,
+        cell_fg: Color,
+        cell_underline_color: Option<Color>,
+        fg: &mut Rgb,
+        flags: &mut Flags,
+    ) {
+        let primary = &colors.primary;
+        let is_bold = flags.contains(Flags::BOLD);
+        let is_dim = flags.contains(Flags::DIM);
+
+        // XTerm `colorBDMode` / `-bdc`: bold is signalled by color alone, so drop the bold
+        // font weight from every bold cell. This applies even to cells with an explicit SGR
+        // color, which keep that color but lose the bold font (`colorBD` recoloring below
+        // only touches default-foreground cells). Dim cells are left to the dim/bold path
+        // in `compute_fg_rgb`.
+        if colors.bold_is_color_only && is_bold && !is_dim {
+            flags.remove(Flags::BOLD);
+        }
+
+        // Attribute colors only replace the default foreground; explicit colors win.
+        if cell_fg != Color::Named(NamedColor::Foreground) {
+            return;
+        }
+
+        // XTerm `colorBD`. Dim cells are skipped so the dim/bold path in
+        // `compute_fg_rgb` keeps owning them.
+        if is_bold && !is_dim {
+            if let Some(rgb) = primary.bold_foreground {
+                *fg = rgb;
+            }
+        }
+
+        // XTerm `colorUL`. Skipped when an explicit SGR-58 underline color is set.
+        if flags.intersects(Flags::ALL_UNDERLINES) && cell_underline_color.is_none() {
+            if let Some(rgb) = primary.underline_foreground {
+                *fg = rgb;
+            }
         }
     }
 
@@ -548,5 +606,157 @@ impl Deref for HintMatches<'_> {
 
     fn deref(&self) -> &Self::Target {
         self.matches.deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::color::Colors;
+
+    const FG: Rgb = Rgb::new(0xaa, 0xbb, 0xcc);
+    const BD: Rgb = Rgb::new(0x12, 0x34, 0x56);
+    const UL: Rgb = Rgb::new(0x56, 0x34, 0x12);
+
+    fn apply(colors: &Colors, cell_fg: Color, ul: Option<Color>, flags: Flags) -> (Rgb, Flags) {
+        let mut fg = FG;
+        let mut flags = flags;
+        RenderableCell::apply_attribute_foreground_colors(colors, cell_fg, ul, &mut fg, &mut flags);
+        (fg, flags)
+    }
+
+    /// `colorBD` recolors bold text but, like XTerm, leaves the bold font weight in place.
+    #[test]
+    fn bold_foreground_recolors_but_keeps_bold_font() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(BD);
+
+        let (fg, flags) = apply(&colors, Color::Named(NamedColor::Foreground), None, Flags::BOLD);
+
+        assert_eq!(fg, BD);
+        assert!(flags.contains(Flags::BOLD));
+    }
+
+    /// `bold_is_color_only` (`-bdc`) drops the bold font weight once `colorBD` provides a color.
+    #[test]
+    fn bold_is_color_only_drops_bold_font_with_bold_foreground() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(BD);
+        colors.bold_is_color_only = true;
+
+        let (fg, flags) = apply(&colors, Color::Named(NamedColor::Foreground), None, Flags::BOLD);
+
+        assert_eq!(fg, BD);
+        assert!(!flags.contains(Flags::BOLD));
+    }
+
+    /// `colorBDMode` drops the bold font weight even with no `colorBD` color configured; the
+    /// cell just keeps its existing foreground.
+    #[test]
+    fn bold_is_color_only_drops_bold_font_without_color() {
+        let mut colors = Colors::default();
+        colors.bold_is_color_only = true;
+
+        let (fg, flags) = apply(&colors, Color::Named(NamedColor::Foreground), None, Flags::BOLD);
+
+        assert_eq!(fg, FG);
+        assert!(!flags.contains(Flags::BOLD));
+    }
+
+    /// Dim cells are owned by the dim/bold path in `compute_fg_rgb` and must not be hijacked.
+    #[test]
+    fn dim_bold_cell_is_left_untouched() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(BD);
+        colors.bold_is_color_only = true;
+
+        let flags = Flags::BOLD | Flags::DIM;
+        let (fg, out) = apply(&colors, Color::Named(NamedColor::Foreground), None, flags);
+
+        assert_eq!(fg, FG);
+        assert_eq!(out, flags);
+    }
+
+    /// `colorUL` recolors underlined text while keeping the underline mark drawn.
+    #[test]
+    fn underline_foreground_recolors_and_keeps_underline() {
+        let mut colors = Colors::default();
+        colors.primary.underline_foreground = Some(UL);
+
+        let (fg, flags) =
+            apply(&colors, Color::Named(NamedColor::Foreground), None, Flags::UNDERLINE);
+
+        assert_eq!(fg, UL);
+        assert!(flags.contains(Flags::UNDERLINE));
+    }
+
+    /// `colorUL` applies to every underline style, not just the plain single underline.
+    #[test]
+    fn underline_foreground_applies_to_enhanced_underlines() {
+        let mut colors = Colors::default();
+        colors.primary.underline_foreground = Some(UL);
+
+        let (fg, flags) =
+            apply(&colors, Color::Named(NamedColor::Foreground), None, Flags::DOUBLE_UNDERLINE);
+
+        assert_eq!(fg, UL);
+        assert!(flags.contains(Flags::DOUBLE_UNDERLINE));
+    }
+
+    /// An explicit SGR-58 underline color wins over `colorUL`.
+    #[test]
+    fn underline_foreground_skipped_with_explicit_underline_color() {
+        let mut colors = Colors::default();
+        colors.primary.underline_foreground = Some(UL);
+
+        let explicit = Some(Color::Named(NamedColor::Red));
+        let (fg, _) =
+            apply(&colors, Color::Named(NamedColor::Foreground), explicit, Flags::UNDERLINE);
+
+        assert_eq!(fg, FG);
+    }
+
+    /// `colorBD`/`colorUL` never recolor application-chosen SGR colors.
+    #[test]
+    fn explicit_foreground_is_never_recolored() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(BD);
+        colors.primary.underline_foreground = Some(UL);
+
+        let flags = Flags::BOLD | Flags::UNDERLINE;
+        let (fg, out) = apply(&colors, Color::Named(NamedColor::Blue), None, flags);
+
+        assert_eq!(fg, FG);
+        assert_eq!(out, flags);
+    }
+
+    /// `colorBDMode` drops the bold font weight from explicitly-colored bold text too: the SGR
+    /// color is kept, only the bold font is removed, and other attributes such as underline
+    /// stay intact.
+    #[test]
+    fn bold_is_color_only_drops_bold_font_on_explicit_color() {
+        let mut colors = Colors::default();
+        colors.primary.bold_foreground = Some(BD);
+        colors.bold_is_color_only = true;
+
+        let flags = Flags::BOLD | Flags::UNDERLINE;
+        let (fg, out) = apply(&colors, Color::Named(NamedColor::Blue), None, flags);
+
+        assert_eq!(fg, FG);
+        assert!(!out.contains(Flags::BOLD));
+        assert!(out.contains(Flags::UNDERLINE));
+    }
+
+    /// With no colors configured the cell is passed through unchanged.
+    #[test]
+    fn unset_attribute_colors_preserve_flags_and_color() {
+        let colors = Colors::default();
+
+        let flags = Flags::BOLD | Flags::UNDERLINE;
+        let (fg, out) = apply(&colors, Color::Named(NamedColor::Foreground), None, flags);
+
+        assert_eq!(fg, FG);
+        assert_eq!(out, flags);
     }
 }
