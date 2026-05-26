@@ -20,6 +20,7 @@ pub struct Colors {
     pub hints: HintColors,
     pub transparent_background_colors: bool,
     pub draw_bold_text_with_bright_colors: bool,
+    pub bold_is_color_only: bool,
     footer_bar: BarColors,
 }
 
@@ -173,6 +174,8 @@ pub struct PrimaryColors {
     pub background: Rgb,
     pub bright_foreground: Option<Rgb>,
     pub dim_foreground: Option<Rgb>,
+    pub bold_foreground: Option<Rgb>,
+    pub underline_foreground: Option<Rgb>,
 }
 
 impl Default for PrimaryColors {
@@ -182,6 +185,8 @@ impl Default for PrimaryColors {
             foreground: Rgb::new(0xd8, 0xd8, 0xd8),
             bright_foreground: Default::default(),
             dim_foreground: Default::default(),
+            bold_foreground: Default::default(),
+            underline_foreground: Default::default(),
         }
     }
 }

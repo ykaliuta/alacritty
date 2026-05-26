@@ -325,6 +325,27 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 
 		Default: _"None"_
 
+	*bold_foreground* = _"<string>"_
+
+		Color used for bold text when the cell's foreground is the default
+		foreground (no explicit SGR color). Equivalent to XTerm's _colorBD_
+		resource. Cells whose color was set by the application are not
+		affected.
+
+		Takes precedence over _draw\_bold\_text\_with\_bright\_colors_ when both
+		apply to the same cell.
+
+		Default: _"None"_
+
+	*underline_foreground* = _"<string>"_
+
+		Color used for underlined text when the cell's foreground is the default
+		foreground and no explicit underline color was set with the SGR _58_
+		escape. Equivalent to XTerm's _colorUL_ resource. Both the character and
+		the underline mark are tinted with this color.
+
+		Default: _"None"_
+
 *cursor* = { text = _"<string>"_, cursor = _"<string>"_ }
 
 	Colors which should be used to draw the terminal cursor.
@@ -489,6 +510,16 @@ Colors are specified using their hexadecimal values with a _#_ prefix: _#RRGGBB_
 *draw_bold_text_with_bright_colors* = _true_ | _false_
 
 	When _true_, bold text is drawn using the bright color variants.
+
+	Default: _false_
+
+*bold_is_color_only* = _true_ | _false_
+
+	When _true_, bold cells whose foreground was overridden by
+	_colors.primary.bold\_foreground_ are rendered with the regular font weight
+	instead of the bold font, leaving color as the sole bold indicator. Has no
+	effect unless _colors.primary.bold\_foreground_ is set. Equivalent to
+	XTerm's _colorBDMode_ / _-bdc_.
 
 	Default: _false_
 
